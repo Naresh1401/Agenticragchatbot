@@ -98,6 +98,14 @@ class ChatResponse(BaseModel):
     pii_detected: bool = False
     injection_detected: bool = False
     low_confidence: bool = False
+    verification_issues: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Auto-detected LLM flaw issues (knowledge cutoff, hallucination, missing attribution)",
+    )
+    corrections_applied: List[str] = Field(
+        default_factory=list,
+        description="Auto-corrections applied to fix LLM flaws",
+    )
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 

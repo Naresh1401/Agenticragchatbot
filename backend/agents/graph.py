@@ -30,6 +30,7 @@ from typing_extensions import TypedDict
 
 from backend.agents.tools import ALL_TOOLS
 from backend.config import get_settings
+from backend.guardrails.answer_verifier import verify_and_correct
 from backend.guardrails.injection_detector import detect_injection
 from backend.guardrails.pii_redactor import PIIRedactor
 from backend.models.schemas import Citation, ChatResponse, ToolCall
@@ -212,6 +213,10 @@ class AgentState(TypedDict):
     # Clarification flag
     needs_clarification: bool
     clarification_question: str
+
+    # Answer verification results (auto-correction of LLM flaws)
+    verification_issues: List[Dict]
+    corrections_applied: List[str]
 
 
 # ── LLM Factory ──────────────────────────────────────────────────────────────
@@ -739,6 +744,32 @@ def output_guard_node(state: AgentState) -> Dict:
             "Please upload more relevant documents or rephrase your question."
         )
 
+    # ── Auto-correct the 3 LLM flaws ────────────────────────────────────────
+    verification_issues: List[Dict] = []
+    corrections_applied: List[str] = []
+
+    try:
+        vr = verify_and_correct(answer=final_answer, citations=cits)
+        if not vr.is_clean:
+            final_answer = vr.corrected_answer
+            verification_issues = [
+                {
+                    "flaw_type": iss.flaw_type,
+                    "severity": iss.severity,
+                    "description": iss.description,
+                    "evidence": iss.evidence,
+                }
+                for iss in vr.issues
+            ]
+            corrections_applied = list(vr.corrections_applied)
+            logger.info(
+                "llm_flaws_auto_corrected",
+                issues=len(verification_issues),
+                corrections=corrections_applied,
+            )
+    except Exception as exc:
+        logger.warning("answer_verification_error", error=str(exc))
+
     # Update state with filtered citations so only good ones reach the response
     last_msg = state.get("messages", [])[-1] if state.get("messages") else None
     last_content = getattr(last_msg, "content", None) if last_msg else None
@@ -747,6 +778,8 @@ def output_guard_node(state: AgentState) -> Dict:
         "confidence": confidence,
         "citations": cits,  # pass filtered citations forward
         "messages": [AIMessage(content=final_answer)] if final_answer != last_content else [],
+        "verification_issues": verification_issues,
+        "corrections_applied": corrections_applied,
     }
 
 
@@ -838,6 +871,8 @@ async def run_agent(
         "confidence": 1.0,
         "needs_clarification": False,
         "clarification_question": "",
+        "verification_issues": [],
+        "corrections_applied": [],
     }
 
     # Run the graph
@@ -986,4 +1021,6 @@ async def run_agent(
         pii_detected=final_state.get("pii_detected", False),
         injection_detected=final_state.get("injection_detected", False),
         low_confidence=low_confidence,
+        verification_issues=final_state.get("verification_issues", []),
+        corrections_applied=final_state.get("corrections_applied", []),
     )
