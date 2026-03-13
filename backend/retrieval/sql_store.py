@@ -110,6 +110,17 @@ class SQLStore:
     def list_tables(self) -> List[str]:
         return inspect(self._engine).get_table_names()
 
+    def drop_all_tables(self) -> int:
+        """Drop all tables. Returns number of tables dropped."""
+        inspector = inspect(self._engine)
+        tables = inspector.get_table_names()
+        with self._engine.connect() as conn:
+            for table in tables:
+                conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
+            conn.commit()
+        logger.info("sql_drop_all_tables", count=len(tables))
+        return len(tables)
+
 
 def _sanitise_table_name(name: str) -> str:
     """Allow only alphanumeric + underscore in table names."""

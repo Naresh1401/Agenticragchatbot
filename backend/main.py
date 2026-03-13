@@ -675,6 +675,54 @@ async def list_sources():
     ]
 
 
+@app.delete("/sources")
+async def clear_all_sources():
+    """Delete ALL data from the knowledge base (vector store, SQL tables, uploaded files)."""
+    vs = get_vector_store()
+    sql = get_sql_store()
+
+    # Delete all vectors
+    sources = _chroma_sources(vs)
+    total_chunks = 0
+    for s in sources:
+        try:
+            total_chunks += vs.delete_by_source(s["filename"])
+        except Exception as e:
+            logger.error("clear_source_error", filename=s["filename"], error=str(e))
+
+    # Drop all SQL tables
+    tables_dropped = 0
+    try:
+        tables_dropped = sql.drop_all_tables()
+    except Exception as e:
+        logger.error("clear_sql_error", error=str(e))
+
+    # Remove uploaded files
+    files_removed = 0
+    upload_dir = settings.upload_dir
+    if os.path.isdir(upload_dir):
+        for f in os.listdir(upload_dir):
+            fpath = os.path.join(upload_dir, f)
+            if os.path.isfile(fpath):
+                os.remove(fpath)
+                files_removed += 1
+
+    # Invalidate caches
+    try:
+        from backend.agents.graph import invalidate_source_cache
+        invalidate_source_cache()
+    except Exception:
+        pass
+
+    return {
+        "status": "cleared",
+        "chunks_deleted": total_chunks,
+        "tables_dropped": tables_dropped,
+        "files_removed": files_removed,
+        "message": f"Knowledge base cleared: {total_chunks} chunks, {tables_dropped} tables, {files_removed} files removed.",
+    }
+
+
 @app.delete("/sources/{filename}")
 async def delete_source(filename: str):
     """Delete all chunks belonging to a specific source file from the knowledge base."""

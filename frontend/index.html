@@ -863,7 +863,10 @@
 
       <!-- Sources -->
       <div class="sources-wrap">
-        <h3>📚 Knowledge Base <span id="source-count" style="color:var(--text-muted);font-weight:400"></span></h3>
+        <h3 style="display:flex;align-items:center;justify-content:space-between">
+          <span>📚 Knowledge Base <span id="source-count" style="color:var(--text-muted);font-weight:400"></span></span>
+          <button onclick="clearKnowledgeBase()" title="Clear all data & refresh" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:0.72rem;padding:4px 10px;cursor:pointer;font-family:inherit;transition:var(--transition);display:flex;align-items:center;gap:4px;" onmouseover="this.style.borderColor='var(--red)';this.style.color='var(--red)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-secondary)'">🗑 Clear All</button>
+        </h3>
         <div id="sources-list">
           <div class="no-sources">No data sources yet. Upload or ingest files to get started!</div>
         </div>
@@ -1733,6 +1736,21 @@ async function loadSources() {
       list.appendChild(chip);
     });
   } catch (e) { /* ignore */ }
+}
+
+async function clearKnowledgeBase() {
+  if (!confirm('Clear ALL data from the knowledge base? This removes all uploaded documents, vectors, and SQL tables. This cannot be undone.')) return;
+  try {
+    const resp = await fetch(`${API}/sources`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error('Failed to clear');
+    const data = await resp.json();
+    activeSources = [];
+    loadSources();
+    checkHealth();
+    alert(data.message);
+  } catch (e) {
+    alert('Failed to clear knowledge base: ' + e.message);
+  }
 }
 
 // ── Health check ────────────────────────────────────────────────────────────
