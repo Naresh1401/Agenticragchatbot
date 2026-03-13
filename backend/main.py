@@ -22,6 +22,8 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from typing import List
+
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -35,6 +37,7 @@ from backend.models.schemas import (
     ChatRequest,
     ChatResponse,
     IngestURLRequest,
+    MultiUploadResponse,
     ScrapeRequest,
     SessionHistory,
     SourceInfo,
@@ -345,6 +348,85 @@ async def upload_file(file: UploadFile = File(...)):
         chunks_indexed=result["chunks_indexed"],
         file_type=result["file_type"],
         message=f"Successfully indexed {result['chunks_indexed']} chunks from {safe_name}",
+    )
+
+
+# ── Batch File Upload ─────────────────────────────────────────────────────
+
+
+@app.post("/upload/batch", response_model=MultiUploadResponse)
+async def upload_files_batch(files: List[UploadFile] = File(...)):
+    """Upload multiple files at once for ingestion into the knowledge base."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided.")
+
+    from backend.ingestion.document_loader import supported_extensions
+
+    max_bytes = settings.max_file_size_mb * 1024 * 1024
+    os.makedirs(settings.upload_dir, exist_ok=True)
+
+    results: list[UploadResponse] = []
+    errors: list[dict[str, str]] = []
+
+    for file in files:
+        if not file.filename:
+            errors.append({"filename": "unknown", "error": "No filename provided"})
+            continue
+
+        safe_name = _sanitise_filename(file.filename)
+        ext = Path(safe_name).suffix.lower()
+
+        if ext not in supported_extensions():
+            errors.append({
+                "filename": safe_name,
+                "error": f"Unsupported file type '{ext}'. Supported: {', '.join(supported_extensions())}",
+            })
+            continue
+
+        content = await file.read()
+        if len(content) > max_bytes:
+            errors.append({
+                "filename": safe_name,
+                "error": f"File too large. Max: {settings.max_file_size_mb} MB",
+            })
+            continue
+
+        save_path = os.path.join(settings.upload_dir, safe_name)
+        with open(save_path, "wb") as f:
+            f.write(content)
+
+        try:
+            result = ingest_file(save_path)
+            results.append(UploadResponse(
+                status="success",
+                filename=safe_name,
+                source_id=result["source_id"],
+                chunks_indexed=result["chunks_indexed"],
+                file_type=result["file_type"],
+                message=f"Successfully indexed {result['chunks_indexed']} chunks from {safe_name}",
+            ))
+        except Exception as e:
+            if os.path.exists(save_path):
+                os.remove(save_path)
+            errors.append({"filename": safe_name, "error": str(e)})
+            logger.error("batch_upload_error", filename=safe_name, error=str(e))
+
+    # Invalidate cached source names so agent picks up new files immediately
+    try:
+        from backend.agents.graph import invalidate_source_cache
+        invalidate_source_cache()
+    except Exception:
+        pass
+
+    total = len(results) + len(errors)
+    return MultiUploadResponse(
+        status="success" if results else "failed",
+        total_files=total,
+        successful=len(results),
+        failed=len(errors),
+        results=results,
+        errors=errors,
+        message=f"Processed {total} files: {len(results)} succeeded, {len(errors)} failed",
     )
 
 

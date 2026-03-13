@@ -766,11 +766,11 @@
         </div>
         <div class="section-body">
           <div class="upload-zone" id="drop-zone">
-            <input type="file" id="file-input" accept=".pdf,.txt,.md,.docx,.json,.csv,.xlsx" />
+            <input type="file" id="file-input" accept=".pdf,.txt,.md,.docx,.json,.csv,.xlsx" multiple />
             <div class="upload-icon">📄</div>
             <div class="upload-text">
               Drop files here or <strong>click to browse</strong>
-              <small>PDF, TXT, DOCX, JSON, CSV, XLSX — up to 50 MB</small>
+              <small>PDF, TXT, DOCX, JSON, CSV, XLSX — up to 50 MB each (multiple files supported)</small>
             </div>
           </div>
           <div class="input-status" id="upload-status"></div>
@@ -870,7 +870,7 @@
 </div>
 
 <!-- Hidden file input for attach menu -->
-<input type="file" id="hidden-file-input" accept=".pdf,.txt,.md,.docx,.json,.csv,.xlsx" style="display:none" />
+<input type="file" id="hidden-file-input" accept=".pdf,.txt,.md,.docx,.json,.csv,.xlsx" style="display:none" multiple />
 
 <script>
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -1340,6 +1340,68 @@ async function uploadFile(file) {
   }
 }
 
+async function uploadMultipleFiles(fileList) {
+  if (!fileList || fileList.length === 0) return;
+
+  if (fileList.length === 1) {
+    return uploadFile(fileList[0]);
+  }
+
+  // Batch upload for multiple files
+  const status = $('upload-status');
+  status.className = 'input-status loading';
+  status.textContent = `⏳ Uploading ${fileList.length} files...`;
+
+  const formData = new FormData();
+  for (const file of fileList) {
+    formData.append('files', file);
+  }
+
+  try {
+    const resp = await fetch(`${API}/upload/batch`, { method: 'POST', body: formData });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+
+    if (data.successful > 0) {
+      status.className = 'input-status success';
+      const totalChunks = data.results.reduce((sum, r) => sum + r.chunks_indexed, 0);
+      status.textContent = `✅ ${data.successful}/${data.total_files} files uploaded (${totalChunks} total chunks)`;
+      showToast('success', `${data.successful} files uploaded`, `${totalChunks} total chunks indexed`);
+      loadSources();
+
+      for (const r of data.results) {
+        const idx = activeSources.indexOf(r.filename);
+        if (idx !== -1) activeSources.splice(idx, 1);
+        activeSources.push(r.filename);
+      }
+
+      const fileNames = data.results.map(r => `**${r.filename}** (${r.chunks_indexed} chunks)`).join(', ');
+      appendMessage('assistant', `I've successfully processed **${data.successful} files**: ${fileNames}. You can now ask me anything about these documents!`);
+      addFollowupSuggestions('');
+    }
+
+    if (data.failed > 0) {
+      const errMsg = data.errors.map(e => `${e.filename}: ${e.error}`).join('; ');
+      if (data.successful === 0) {
+        status.className = 'input-status error';
+        status.textContent = `❌ All ${data.failed} files failed`;
+      }
+      showToast('error', `${data.failed} file(s) failed`, errMsg);
+    }
+
+  } catch (err) {
+    status.className = 'input-status error';
+    status.textContent = `❌ ${err.message}`;
+    showToast('error', 'Batch upload failed', err.message);
+  } finally {
+    $('file-input').value = '';
+    $('hidden-file-input').value = '';
+  }
+}
+
 // ── URL Ingest ──────────────────────────────────────────────────────────────
 
 async function ingestFromURL() {
@@ -1650,10 +1712,10 @@ $('sidebar-scrape-input').addEventListener('keydown', e => { if (e.key === 'Ente
 // File uploads
 $('drop-zone').addEventListener('click', () => $('file-input').click());
 $('file-input').addEventListener('change', e => {
-  if (e.target.files.length > 0) uploadFile(e.target.files[0]);
+  if (e.target.files.length > 0) uploadMultipleFiles(e.target.files);
 });
 $('hidden-file-input').addEventListener('change', e => {
-  if (e.target.files.length > 0) uploadFile(e.target.files[0]);
+  if (e.target.files.length > 0) uploadMultipleFiles(e.target.files);
 });
 
 // Drag and drop
@@ -1662,7 +1724,7 @@ dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dra
 dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
 dz.addEventListener('drop', e => {
   e.preventDefault(); dz.classList.remove('dragover');
-  if (e.dataTransfer.files.length > 0) uploadFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length > 0) uploadMultipleFiles(e.dataTransfer.files);
 });
 
 // Mobile sidebar - close on outside click

@@ -43,6 +43,16 @@ class UploadResponse(BaseModel):
     message: str
 
 
+class MultiUploadResponse(BaseModel):
+    status: str
+    total_files: int
+    successful: int
+    failed: int
+    results: List[UploadResponse]
+    errors: List[Dict[str, str]] = Field(default_factory=list)
+    message: str
+
+
 class SourceInfo(BaseModel):
     source_id: str
     filename: str

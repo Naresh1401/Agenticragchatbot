@@ -6,20 +6,20 @@
 
 ## Table of Contents
 
-1. [What is RAG?](#1-what-is-rag)
-2. [Why RAG Exists — The Problem It Solves](#2-why-rag-exists--the-problem-it-solves)
-3. [The Three Pillars of RAG](#3-the-three-pillars-of-rag)
-4. [Pillar 1 — Retrieval (Finding the Right Information)](#4-pillar-1--retrieval-finding-the-right-information)
-   - [4.1 Document Ingestion — Preparing Data for Retrieval](#41-document-ingestion--preparing-data-for-retrieval)
-   - [4.2 Chunking — Breaking Documents into Searchable Pieces](#42-chunking--breaking-documents-into-searchable-pieces)
-   - [4.3 Embedding — Converting Text to Vectors](#43-embedding--converting-text-to-vectors)
-   - [4.4 Storing — Saving Vectors in ChromaDB](#44-storing--saving-vectors-in-chromadb)
-   - [4.5 Searching — Finding Relevant Chunks at Query Time](#45-searching--finding-relevant-chunks-at-query-time)
-   - [4.6 Re-Ranking — Refining Results with RRF](#46-re-ranking--refining-results-with-rrf)
-5. [Pillar 2 — Augmentation (Enhancing the LLM's Context)](#5-pillar-2--augmentation-enhancing-the-llms-context)
-   - [5.1 System Prompt Construction](#51-system-prompt-construction)
-   - [5.2 Dynamic Context Injection](#52-dynamic-context-injection)
-   - [5.3 Tool Results as Augmented Context](#53-tool-results-as-augmented-context)
+1. What is RAG?
+2. Why RAG Exists — The Problem It Solves
+3. The Three Pillars of RAG
+4. Pillar 1 — Retrieval 
+   - 4.1 Document Ingestion — Preparing Data for Retrieval
+   - 4.2 Chunking — Breaking Documents into Searchable Pieces
+   - 4.3 Embedding — Converting Text to Vectors
+   - 4.4 Storing — Saving Vectors in ChromaDB
+   - 4.5 Searching — Finding Relevant Chunks at Query Time
+   - 4.6 Re-Ranking — Refining Results with RRF
+5. [Pillar 2 — Augmentation 
+   - [5.1 System Prompt Construction
+   - [5.2 Dynamic Context Injection
+   - [5.3 Tool Results as Augmented Context
    - [5.4 Token-Aware History Trimming](#54-token-aware-history-trimming)
 6. [Pillar 3 — Generation (Producing the Final Answer)](#6-pillar-3--generation-producing-the-final-answer)
    - [6.1 The LLM Reasoning Step](#61-the-llm-reasoning-step)
@@ -29,6 +29,18 @@
 8. [Standard RAG vs. Agentic RAG](#8-standard-rag-vs-agentic-rag)
 9. [End-to-End Walkthrough — A Real Query](#9-end-to-end-walkthrough--a-real-query)
 10. [Key Concepts Glossary](#10-key-concepts-glossary)
+11. [Document Updates & Re-Ingestion — Handling Changing Documents](#11-document-updates--re-ingestion--handling-changing-documents)
+    - [11.1 The Problem — Documents Change Over Time](#111-the-problem--documents-change-over-time)
+    - [11.2 How This RAG Solves It — Replace-on-Reupload Strategy](#112-how-this-rag-solves-it--replace-on-reupload-strategy)
+    - [11.3 The Re-Ingestion Pipeline (Step by Step)](#113-the-re-ingestion-pipeline-step-by-step)
+    - [11.4 SQL Table Updates for Structured Data](#114-sql-table-updates-for-structured-data)
+    - [11.5 Manual Deletion via API](#115-manual-deletion-via-api)
+    - [11.6 Source Cache Invalidation](#116-source-cache-invalidation)
+12. [Multi-File Upload — Processing Multiple Documents at Once](#12-multi-file-upload--processing-multiple-documents-at-once)
+    - [12.1 The Multi-File Upload Endpoint](#121-the-multi-file-upload-endpoint)
+    - [12.2 How It Works — End-to-End Flow](#122-how-it-works--end-to-end-flow)
+    - [12.3 Frontend Multi-File Support](#123-frontend-multi-file-support)
+    - [12.4 Cross-File Retrieval — Querying Across All Documents](#124-cross-file-retrieval--querying-across-all-documents)
 
 ---
 
@@ -236,6 +248,87 @@ An **embedding** is a list of numbers (a vector) that captures the *meaning* of 
 "A feline rested on a rug" →  [0.11, -0.44, 0.79, 0.31, ...]  (very similar!)
 "Stock market crashed"    →  [0.89, 0.22, -0.56, 0.01, ...]  (very different)
 ```
+
+#### 2D Sketch — How a Query Finds Relevant Chunks
+
+In reality, embeddings live in 1536-dimensional space. But if we project them down to **2D**, you can visualize how a query vector lands near semantically similar chunks and far from unrelated ones:
+
+```
+                        ▲ Dimension 2 (meaning axis)
+                        │
+                   1.0  │          ⭐ QUERY: "What was Q3 revenue?"
+                        │            ╲
+                        │             ╲  (small distance = HIGH similarity)
+                   0.8  │              ╲
+                        │            ● chunk_2: "Q3 revenue was $2.5B..."
+                        │                  (distance=0.18, similarity=0.91)
+                   0.6  │
+                        │        ● chunk_4: "Revenue beat estimates..."
+                        │              (distance=0.31, similarity=0.85)
+                   0.4  │
+                        │
+                   0.2  │                              ○ chunk_3: "Employee count grew..."
+                        │                                    (distance=1.22, similarity=0.39)
+                   0.0  │
+                        │  ○ chunk_1: "Board of directors..."
+                  -0.2  │       (distance=1.38, similarity=0.31)
+                        │
+                        │         ○ chunk_0: "Company overview..."
+                  -0.4  │              (distance=1.45, similarity=0.28)
+                        │
+                        └──────────────────────────────────────────► Dimension 1
+                       -0.4  -0.2   0.0   0.2   0.4   0.6   0.8  1.0
+
+                  Legend:  ⭐ = Query vector    ● = Relevant chunks (close)    ○ = Irrelevant chunks (far)
+```
+
+**How to read this:** The query "What was Q3 revenue?" becomes a point in vector space (⭐). Chunks about revenue (●) cluster near it because their meanings are similar. Chunks about unrelated topics (○) are far away. ChromaDB returns the nearest points.
+
+#### 3D Sketch — Multi-Dimensional Similarity Across Documents
+
+With a third dimension, you can see how chunks from **different uploaded files** form clusters, and how a query can pull relevant chunks from multiple files at once:
+
+```
+                            Dimension 3 (topic depth)
+                           ╱
+                          ╱
+                    1.0  ╱
+                        ╱  ┌─────────────────────────────────────────────┐
+                       ╱   │          3D VECTOR SPACE                    │
+                      ╱    │                                             │
+                     ╱     │    📄 report.pdf chunks                    │
+                    ╱      │    ┌───────────┐                           │
+                   ╱       │    │ ●₁ ●₂  ●₃ │  ← revenue, financials   │
+                  ╱        │    │   ●₄  ●₅  │                          │
+                 ╱   ▲     │    └─────╱─────┘                           │
+                ╱    │     │         ╱                                   │
+               ╱     │     │    ⭐ QUERY lands HERE                     │
+              ╱      │     │     (searches ALL files at once)           │
+             ╱       │     │         ╲                                   │
+            ╱  Dim 2 │     │    ┌─────╲─────┐                           │
+           ╱         │     │    │ ●₆   ●₇  │  ← sales data             │
+          ╱          │     │    │  ●₈  ●₉  │                           │
+         ╱           │     │    └───────────┘                           │
+        ╱            │     │    📊 financials.csv chunks                │
+       ╱             │     │                                             │
+      ╱              │     │                         ┌───────────┐      │
+     ╱               │     │                         │ ○₁₀  ○₁₁ │      │
+    ╱                │     │                         │   ○₁₂    │      │
+   ╱                 │     │                         └───────────┘      │
+  ╱                  │     │                         📋 handbook.pdf    │
+ ╱                   │     │                         (HR topics — far)  │
+╱                    │     └─────────────────────────────────────────────┘
+─────────────────────┘──────────────────────────────► Dimension 1
+```
+
+**How to read this 3D view:**
+- Each **uploaded file's** chunks naturally cluster together (same document = similar topics)
+- The ⭐ **query** vector lands in the region between `report.pdf` and `financials.csv` because both contain revenue data
+- ChromaDB returns the **nearest chunks regardless of which file they came from** (●₁, ●₂, ●₆, ●₇, etc.)
+- `handbook.pdf` chunks (○) are far away in vector space because HR topics are semantically different from revenue
+- This is how **cross-file retrieval** works: one query, one vector space, chunks from all files compete on relevance
+
+**The real math:** In actual 1536-dimensional space, "distance" is measured by **cosine similarity** — the angle between two vectors. Two vectors pointing in the same direction (angle ≈ 0°) have similarity ≈ 1.0. Perpendicular vectors (angle = 90°) have similarity ≈ 0.0.
 
 In this project, OpenAI's `text-embedding-3-small` model generates 1536-dimensional vectors:
 
@@ -962,3 +1055,316 @@ RAG is not one technique — it's a **pipeline** of three stages working togethe
    - Implemented via: GPT-4o-mini with grounding rules, confidence scoring, citation extraction, PII redaction
 
 The **Agentic** aspect adds a fourth dimension — **decision-making** — where the LLM itself chooses *when* to retrieve, *what* to retrieve, and *when* it has enough context to generate a final answer, iterating through the RAG cycle as many times as needed.
+
+---
+
+## 11. Document Updates & Re-Ingestion — Handling Changing Documents
+
+### 11.1 The Problem — Documents Change Over Time
+
+In real-world enterprise use, policy documents, compliance manuals, HR handbooks, and company procedures are updated regularly — quarterly, annually, or even ad-hoc. A RAG system must handle this gracefully:
+
+- **Stale data**: If old chunks remain in the vector database after a document is updated, the LLM may cite outdated policies.
+- **Duplicate data**: If new chunks are added without removing old ones, the same document appears twice with conflicting information.
+- **Consistency**: Structured data (CSV/JSON in SQL) and unstructured data (vectors in ChromaDB) must both be refreshed.
+
+### 11.2 How This RAG Solves It — Replace-on-Reupload Strategy
+
+This project uses a **filename-based replace-on-reupload** strategy. When you upload a file with the same name as an existing file, the system:
+
+1. **Deletes ALL old chunks** for that filename from ChromaDB
+2. **Re-processes** the new file through the full ingestion pipeline (load → chunk → embed → store)
+3. **Replaces the SQL table** entirely for structured data (CSV/JSON)
+
+This means: **to update a document, simply re-upload it with the same filename.** The old version is completely replaced.
+
+### 11.3 The Re-Ingestion Pipeline (Step by Step)
+
+Here is the exact code flow when a previously-uploaded document is re-uploaded:
+
+```
+User uploads "company_policy_v2.pdf" (same name as existing "company_policy_v2.pdf")
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 0: De-duplicate (DELETE old data)                 │
+│                                                         │
+│  indexer.py — ingest_file():                           │
+│    vs.delete_by_source("company_policy_v2.pdf")        │
+│                                                         │
+│  This queries ChromaDB:                                │
+│    WHERE source = "company_policy_v2.pdf"              │
+│    → Gets all matching chunk IDs                       │
+│    → Batch-deletes them (5000 per batch)               │
+│                                                         │
+│  Result: ALL old chunks for this file are gone         │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 1-4: Normal ingestion pipeline                   │
+│                                                         │
+│  1. Load: Parse PDF → extract text per page            │
+│  2. Chunk: Split into 512-char chunks with overlap     │
+│  3. Embed: Generate 1536-dim vectors via OpenAI        │
+│  4. Store: Insert new chunks into ChromaDB             │
+│                                                         │
+│  Each chunk carries metadata:                          │
+│    source = "company_policy_v2.pdf"                    │
+│    file_type = "pdf"                                   │
+│    page_number = 1, 2, 3...                            │
+│    chunk_id = "company_policy_v2.pdf::chunk_0", etc.   │
+└─────────────────────────────────────────────────────────┘
+```
+
+The relevant code in `backend/ingestion/indexer.py`:
+
+```python
+# backend/ingestion/indexer.py — ingest_file() Step 0
+def ingest_file(file_path: str) -> dict:
+    filename = Path(file_path).name
+    vs = get_vector_store()
+
+    # ── Step 0: Remove old chunks for this source (de-duplication) ──
+    try:
+        deleted = vs.delete_by_source(filename)
+        if deleted:
+            log.info("dedup_deleted", source=filename, chunks_removed=deleted)
+    except Exception as e:
+        log.warning("dedup_failed", source=filename, error=str(e))
+
+    # Steps 1-4: Load → Chunk → Embed → Store (fresh data)
+    ...
+```
+
+And the deletion mechanism in `backend/retrieval/vector_store.py`:
+
+```python
+# backend/retrieval/vector_store.py — delete_by_source()
+def delete_by_source(self, source_filename: str) -> int:
+    """Delete all chunks where metadata 'source' matches the filename."""
+    results = self._collection.get(where={"source": source_filename})
+    ids = results.get("ids", [])
+    if ids:
+        # Batch delete in groups of 5000
+        for i in range(0, len(ids), 5000):
+            self._collection.delete(ids=ids[i:i+5000])
+    return len(ids)
+```
+
+### 11.4 SQL Table Updates for Structured Data
+
+For CSV and JSON files, the update is even simpler — the SQLite table is **completely replaced**:
+
+```python
+# backend/ingestion/indexer.py — _load_into_sql()
+df.to_sql(table_name, engine, if_exists="replace", index=False)
+```
+
+`if_exists="replace"` drops the old table and creates a new one with the updated data. This means:
+- Old rows are gone
+- New schema is applied (if columns changed)
+- The agent's SQL queries always hit the latest data
+
+### 11.5 Manual Deletion via API
+
+You can also manually remove a document from the knowledge base without re-uploading:
+
+```
+DELETE /sources/{filename}
+```
+
+This:
+1. Removes all vector chunks from ChromaDB where `source = filename`
+2. Deletes the uploaded file from disk
+3. Returns the count of deleted chunks
+
+### 11.6 Source Cache Invalidation
+
+After any upload, re-upload, or deletion, the system calls `invalidate_source_cache()` to clear the 30-second TTL cache of source names. This ensures the agent's system prompt immediately reflects the updated list of available documents:
+
+```python
+# backend/agents/graph.py
+def invalidate_source_cache():
+    _get_source_names.cache_clear()
+```
+
+**Summary of the update strategy:**
+
+| Scenario | What Happens |
+|----------|-------------|
+| Upload new file `report.pdf` | Ingested as new — chunks added to ChromaDB |
+| Re-upload same `report.pdf` | Old chunks deleted → new chunks ingested (full replace) |
+| Delete via `DELETE /sources/report.pdf` | All chunks removed from ChromaDB + file deleted from disk |
+| Re-upload CSV `data.csv` | Old vector chunks deleted + SQLite table replaced with new data |
+| Source cache | Invalidated immediately so agent sees changes |
+
+---
+
+## 12. Multi-File Upload — Processing Multiple Documents at Once
+
+### 12.1 The Multi-File Upload Endpoint
+
+The system supports uploading multiple files in a single request via the `POST /upload/batch` endpoint:
+
+```
+POST /upload/batch
+Content-Type: multipart/form-data
+
+files: [file1.pdf, file2.csv, file3.txt, ...]
+```
+
+**Response** (`MultiUploadResponse`):
+
+```json
+{
+  "status": "success",
+  "total_files": 3,
+  "successful": 2,
+  "failed": 1,
+  "results": [
+    {
+      "status": "success",
+      "filename": "file1.pdf",
+      "source_id": "a1b2c3d4e5f6",
+      "chunks_indexed": 45,
+      "file_type": "pdf",
+      "message": "Successfully indexed 45 chunks from file1.pdf"
+    },
+    {
+      "status": "success",
+      "filename": "file3.txt",
+      "source_id": "g7h8i9j0k1l2",
+      "chunks_indexed": 12,
+      "file_type": "txt",
+      "message": "Successfully indexed 12 chunks from file3.txt"
+    }
+  ],
+  "errors": [
+    {
+      "filename": "file2.xlsx",
+      "error": "Unsupported file type '.xlsx'. Supported: .pdf, .txt, .md, .docx, .json, .csv"
+    }
+  ],
+  "message": "Processed 3 files: 2 succeeded, 1 failed"
+}
+```
+
+The single-file `POST /upload` endpoint also remains available for backward compatibility.
+
+### 12.2 How It Works — End-to-End Flow
+
+```
+User selects 3 files in the browser → Frontend sends multipart POST to /upload/batch
+    │
+    ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Backend: /upload/batch endpoint                              │
+│                                                               │
+│  For EACH file in the batch:                                 │
+│    1. Validate filename exists                               │
+│    2. Sanitize filename (strip special chars, max 128 chars) │
+│    3. Check file extension is supported                      │
+│    4. Check file size ≤ MAX_FILE_SIZE_MB                     │
+│    5. Save to uploads/ directory                             │
+│    6. Run ingest_file(save_path):                            │
+│       a. Delete old chunks (if file existed before)          │
+│       b. Load → Chunk → Embed → Store in ChromaDB           │
+│       c. Load into SQL (if CSV/JSON)                         │
+│    7. Record success or error for this file                  │
+│                                                               │
+│  After ALL files processed:                                  │
+│    → Invalidate source cache (once, not per file)            │
+│    → Return MultiUploadResponse with per-file results        │
+└───────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Result: All files indexed into the SAME ChromaDB collection │
+│                                                               │
+│  ChromaDB collection "rag_documents" now contains:           │
+│    • Chunks from file1.pdf (source="file1.pdf")              │
+│    • Chunks from file2.csv (source="file2.csv")              │
+│    • Chunks from file3.txt (source="file3.txt")              │
+│    • Chunks from any previously uploaded files               │
+│                                                               │
+│  Every chunk has metadata.source = its originating filename  │
+└───────────────────────────────────────────────────────────────┘
+```
+
+The key backend code in `backend/main.py`:
+
+```python
+# backend/main.py — batch upload endpoint
+@app.post("/upload/batch", response_model=MultiUploadResponse)
+async def upload_files_batch(files: List[UploadFile] = File(...)):
+    results = []
+    errors = []
+
+    for file in files:
+        # Validate, save, and ingest each file individually
+        # Failures for one file don't block the others
+        try:
+            result = ingest_file(save_path)
+            results.append(UploadResponse(...))
+        except Exception as e:
+            errors.append({"filename": safe_name, "error": str(e)})
+
+    # Invalidate cache once after all files processed
+    invalidate_source_cache()
+
+    return MultiUploadResponse(
+        total_files=len(results) + len(errors),
+        successful=len(results),
+        failed=len(errors),
+        results=results,
+        errors=errors,
+    )
+```
+
+**Key design decisions:**
+- **Per-file error isolation**: If one file fails (unsupported type, too large, parse error), the other files still get processed successfully.
+- **Single cache invalidation**: The source cache is cleared once at the end, not after each file, for efficiency.
+- **Same ingestion pipeline**: Each file goes through the exact same `ingest_file()` pipeline as a single upload — including de-duplication, so re-uploading a batch with an existing filename replaces it.
+
+### 12.3 Frontend Multi-File Support
+
+The frontend supports selecting or drag-and-dropping multiple files at once:
+
+- **File input**: `<input type="file" multiple />` — the `multiple` attribute allows selecting several files from the file picker.
+- **Drag-and-drop**: The drop zone accepts multiple files dropped simultaneously.
+- **Smart routing**: If only 1 file is selected, uses the single `/upload` endpoint. If 2+ files are selected, uses `/upload/batch`.
+- **Progress feedback**: Shows total progress (`⏳ Uploading 3 files...`), then a summary (`✅ 3/3 files uploaded (127 total chunks)`).
+- **Error reporting**: Per-file errors are displayed via toast notifications so you know exactly which files failed and why.
+
+### 12.4 Cross-File Retrieval — Querying Across All Documents
+
+Once multiple files are uploaded, the agent can search across **all of them simultaneously**:
+
+```
+User: "Compare the revenue figures in report.pdf with the data in financials.csv"
+    │
+    ▼
+Agent calls: retrieve_documents(query="revenue figures", source_filter=None)
+    │
+    ▼
+ChromaDB searches ALL chunks from ALL files → returns top-K most relevant
+    │
+    ▼
+Agent may also call: query_database(sql_query="SELECT revenue FROM financials")
+    │
+    ▼
+Agent synthesizes information from both sources into one answer with citations
+```
+
+**How cross-file retrieval works:**
+
+| Feature | Behavior |
+|---------|----------|
+| Default search | `source_filter=None` — searches ALL uploaded files at once |
+| Source-filtered search | `source_filter="report.pdf"` — restricts search to one specific file |
+| SQL queries | Queries any table created from CSV/JSON uploads |
+| Get all chunks | `get_document_chunks(source_filename="report.pdf")` — retrieves all chunks from one file in order |
+| Citations | Each citation includes the `source` filename so users know which file the information came from |
+
+The agent's system prompt dynamically lists all available sources and SQL tables, so it always knows what documents and data are available to query.
