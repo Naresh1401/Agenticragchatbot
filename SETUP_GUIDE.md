@@ -2,6 +2,8 @@
 
 This is a complete AI chatbot project that can read your documents (PDFs, Word files, CSVs, etc.) and answer questions about them using OpenAI's GPT-4o-mini.
 
+**Live version:** [https://naresh-ragchat.onrender.com](https://naresh-ragchat.onrender.com) — no setup needed, just provide your OpenAI API key in the UI.
+
 ---
 
 ## Prerequisites (What You Need First)
@@ -34,9 +36,11 @@ You need an API key to use GPT-4o-mini (the AI brain of this project).
 1. Go to https://platform.openai.com/api-keys
 2. Sign up or log in
 3. Click **"Create new secret key"**
-4. Copy the key (starts with `sk-...`) — you'll need it in Step 5
+4. Copy the key (starts with `sk-...`) — you'll enter it in the chat UI when prompted
 
 > **Note**: OpenAI charges for API usage. GPT-4o-mini is very affordable (~$0.15 per 1M input tokens). A typical chat session costs less than $0.01.
+> 
+> **New**: You no longer need to put your API key in a `.env` file. The chat UI will prompt you to enter your key, and it’s stored securely in your browser only.
 
 ---
 
@@ -105,14 +109,17 @@ python -m venv .venv
 
 ### Step 5: Set Your OpenAI API Key
 
+The chatbot now has a built-in API key input in the UI. When you open the chat interface, click the **"Set API Key"** button in the top-right corner and enter your key.
+
+Alternatively, you can still set a server-side fallback key in the `.env` file:
 1. In VS Code's file explorer (left sidebar), find and click on the `.env` file
 2. Find this line:
    ```
-   OPENAI_API_KEY=sk-proj-...
+   OPENAI_API_KEY=
    ```
-3. Replace the existing key with YOUR OpenAI API key:
+3. Add your key (optional — users can provide their own via the UI):
    ```
-   OPENAI_API_KEY=sk-proj-YOUR-ACTUAL-KEY-HERE
+   OPENAI_API_KEY=sk-proj-YOUR-KEY-HERE
    ```
 4. Save the file (`Cmd+S` on Mac / `Ctrl+S` on Windows)
 
@@ -187,6 +194,10 @@ You should see the **Agentic RAGChat** interface with a welcome screen!
 2. Choose **"Upload File"**
 3. Select a file from your computer (PDF, DOCX, TXT, CSV, JSON, or XLSX)
 4. Wait for the success message (e.g., "Successfully indexed 24 chunks from report.pdf")
+
+### Clear Knowledge Base
+
+To remove all uploaded documents and indexed data, click the **"🗑 Clear All"** button in the Knowledge Base sidebar. This deletes all vectors, SQL tables, and uploaded files.
 
 ### Ask Questions
 
@@ -300,6 +311,7 @@ This shows an interactive Swagger UI where you can test every endpoint.
 | `/scrape` | POST | Scrape a web page & index it |
 | `/sources` | GET | List all indexed documents |
 | `/sources/{filename}` | DELETE | Remove a document |
+| `/sources` | DELETE | Clear all knowledge base data |
 | `/sessions/{id}` | GET | Get chat history |
 | `/sessions/{id}` | DELETE | Clear a chat session |
 | `/sessions` | GET | List all active sessions |

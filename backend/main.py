@@ -4,9 +4,14 @@ FastAPI application entry point.
 Endpoints:
   POST /chat            – Send a message, receive agentic response
   POST /upload          – Upload a file for ingestion
+  POST /ingest          – Download & ingest a file from URL
+  POST /scrape          – Scrape a web page & ingest its text
   GET  /sources         – List indexed sources
+  DELETE /sources       – Clear all knowledge base data
+  DELETE /sources/{fn}  – Remove a single document from the index
   GET  /sessions/{id}   – Retrieve conversation history
   DELETE /sessions/{id} – Clear a session
+  GET  /sessions        – List all active sessions
   GET  /health          – Health check
   GET  /               – Serve chat UI (frontend/index.html)
 """
