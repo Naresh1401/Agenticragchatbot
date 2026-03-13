@@ -78,6 +78,54 @@
     .header-title span { color: var(--accent-hover); }
     .header-subtitle { font-size: 0.68rem; color: var(--text-muted); margin-top: 1px; letter-spacing: 0.02em; }
     .header-right { display: flex; align-items: center; gap: 12px; }
+    .api-key-btn {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.72rem; color: var(--text-secondary);
+      background: var(--surface2); padding: 5px 12px; border-radius: 20px;
+      border: 1px solid var(--border); cursor: pointer;
+      transition: var(--transition); font-family: inherit;
+    }
+    .api-key-btn:hover { background: var(--surface3); color: var(--text); border-color: var(--accent); }
+    .api-key-btn.has-key { border-color: var(--green); }
+    .api-key-btn.has-key .key-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .key-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+    /* API Key Modal */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 28px; width: 440px; max-width: 90vw;
+      box-shadow: var(--shadow);
+    }
+    .modal h3 { font-size: 1rem; font-weight: 700; margin-bottom: 6px; }
+    .modal p { font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5; }
+    .modal input {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px; color: var(--text);
+      font-size: 0.82rem; font-family: monospace; outline: none;
+      transition: var(--transition); margin-bottom: 14px;
+    }
+    .modal input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .modal-actions button {
+      padding: 8px 18px; border-radius: 8px; font-size: 0.78rem;
+      font-weight: 600; cursor: pointer; border: none; font-family: inherit;
+      transition: var(--transition);
+    }
+    .btn-cancel { background: var(--surface3); color: var(--text-secondary); }
+    .btn-cancel:hover { background: var(--border); color: var(--text); }
+    .btn-save {
+      background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+      color: white; box-shadow: 0 2px 8px var(--accent-glow);
+    }
+    .btn-save:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--accent-glow); }
+    .btn-remove { background: var(--red-soft); color: var(--red); }
+    .btn-remove:hover { background: var(--red); color: white; }
+    .modal-hint { font-size: 0.65rem; color: var(--text-muted); margin-bottom: 14px; line-height: 1.4; }
     #health-badge {
       display: flex; align-items: center; gap: 6px;
       font-size: 0.72rem; color: var(--text-secondary);
@@ -732,6 +780,10 @@
     </div>
   </div>
   <div class="header-right">
+    <button class="api-key-btn" id="api-key-btn" onclick="openApiKeyModal()">
+      <span class="key-dot"></span>
+      <span id="api-key-label">Set API Key</span>
+    </button>
     <div id="health-badge">
       <span class="status-dot offline" id="status-dot"></span>
       <span id="status-text">Connecting...</span>
@@ -872,12 +924,76 @@
 <!-- Hidden file input for attach menu -->
 <input type="file" id="hidden-file-input" accept=".pdf,.txt,.md,.docx,.json,.csv,.xlsx" style="display:none" multiple />
 
+<!-- API Key Modal -->
+<div class="modal-overlay" id="api-key-modal">
+  <div class="modal">
+    <h3>🔑 OpenAI API Key</h3>
+    <p>Enter your own OpenAI API key to use this chatbot. Your key is stored only in your browser and sent with each request — it is never saved on the server.</p>
+    <input type="password" id="api-key-input" placeholder="sk-proj-..." autocomplete="off" spellcheck="false" />
+    <div class="modal-hint">Get your key at <a href="https://platform.openai.com/api-keys" target="_blank" style="color:var(--accent-hover)">platform.openai.com/api-keys</a>. Your key stays private in your browser's localStorage.</div>
+    <div class="modal-actions">
+      <button class="btn-remove" id="api-key-remove-btn" onclick="removeApiKey()" style="display:none">Remove</button>
+      <button class="btn-cancel" onclick="closeApiKeyModal()">Cancel</button>
+      <button class="btn-save" onclick="saveApiKey()">Save Key</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Config ──────────────────────────────────────────────────────────────────
 const API = '';
 let isLoading = false;
 let hasWelcome = true;
 let activeSources = [];  // Track uploaded/ingested filenames for this session
+
+// ── API Key Management ──────────────────────────────────────────────────────
+function getApiKey() { return localStorage.getItem('openai_api_key') || ''; }
+
+function updateApiKeyUI() {
+  const btn = $('api-key-btn');
+  const label = $('api-key-label');
+  if (getApiKey()) {
+    btn.classList.add('has-key');
+    label.textContent = 'API Key ✓';
+  } else {
+    btn.classList.remove('has-key');
+    label.textContent = 'Set API Key';
+  }
+}
+
+function openApiKeyModal() {
+  const modal = $('api-key-modal');
+  const input = $('api-key-input');
+  const removeBtn = $('api-key-remove-btn');
+  input.value = getApiKey();
+  removeBtn.style.display = getApiKey() ? 'inline-block' : 'none';
+  modal.classList.add('active');
+  setTimeout(() => input.focus(), 100);
+}
+
+function closeApiKeyModal() { $('api-key-modal').classList.remove('active'); }
+
+function saveApiKey() {
+  const key = $('api-key-input').value.trim();
+  if (!key) { $('api-key-input').style.borderColor = 'var(--red)'; return; }
+  if (!key.startsWith('sk-')) {
+    $('api-key-input').style.borderColor = 'var(--red)';
+    alert('API key should start with "sk-". Please check your key.');
+    return;
+  }
+  localStorage.setItem('openai_api_key', key);
+  closeApiKeyModal();
+  updateApiKeyUI();
+}
+
+function removeApiKey() {
+  localStorage.removeItem('openai_api_key');
+  closeApiKeyModal();
+  updateApiKeyUI();
+}
+
+// Init API key UI on load
+window.addEventListener('DOMContentLoaded', updateApiKeyUI);
 
 // ── DOM helpers ─────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -1258,10 +1374,18 @@ async function sendMessage() {
   showTyping();
 
   try {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      hideTyping();
+      appendMessage('assistant', '🔑 **Please set your OpenAI API key first!**\n\nClick the **"Set API Key"** button in the top-right corner to enter your key. You can get one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).');
+      isLoading = false;
+      $('send-btn').disabled = false;
+      return;
+    }
     const resp = await fetch(`${API}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, session_id: sessionId, active_sources: activeSources }),
+      body: JSON.stringify({ message, session_id: sessionId, active_sources: activeSources, openai_api_key: apiKey }),
     });
 
     if (!resp.ok) {

@@ -281,6 +281,7 @@ async def chat(request: ChatRequest):
         session_id=request.session_id,
         history=history,
         active_sources=request.active_sources,
+        openai_api_key=request.openai_api_key,
     )
 
     session_store.add_user_message(request.session_id, request.message)

@@ -218,14 +218,21 @@ class AgentState(TypedDict):
     verification_issues: List[Dict]
     corrections_applied: List[str]
 
+    # Per-request OpenAI API key (user-provided, never stored)
+    openai_api_key: Optional[str]
+
 
 # ── LLM Factory ──────────────────────────────────────────────────────────────
 
 
-def _build_llm(mock: bool = False):
+def _build_llm(mock: bool = False, openai_api_key: str | None = None):
     settings = get_settings()
 
     if mock or settings.mock_mode:
+        return _MockLLM()
+
+    api_key = openai_api_key or settings.openai_api_key
+    if not api_key or api_key == "mock-key":
         return _MockLLM()
 
     from langchain_openai import ChatOpenAI
@@ -233,7 +240,7 @@ def _build_llm(mock: bool = False):
     return ChatOpenAI(
         model=settings.llm_model,
         temperature=0,
-        openai_api_key=settings.openai_api_key,
+        openai_api_key=api_key,
         openai_api_base=settings.openai_base_url,
         max_retries=3,
     )
@@ -487,7 +494,7 @@ def input_guard_node(state: AgentState) -> Dict:
     if not settings.mock_mode and len(processed_text.strip()) > 0:
         if _query_needs_rewrite(processed_text):
             try:
-                rewrite_llm = _build_llm()
+                rewrite_llm = _build_llm(openai_api_key=state.get("openai_api_key"))
                 from langchain_core.messages import SystemMessage as SM, HumanMessage as HM
                 rewrite_resp = rewrite_llm.invoke([
                     SM(content=(
@@ -561,7 +568,7 @@ def agent_node(state: AgentState) -> Dict:
     settings = get_settings()
 
     # Build LLM with tools
-    llm = _build_llm()
+    llm = _build_llm(openai_api_key=state.get("openai_api_key"))
     llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
     # Build dynamic system prompt with available sources
@@ -841,6 +848,7 @@ async def run_agent(
     session_id: str,
     history: List[BaseMessage],
     active_sources: List[str] | None = None,
+    openai_api_key: str | None = None,
 ) -> ChatResponse:
     """
     Run one turn of the agentic RAG pipeline.
@@ -873,12 +881,13 @@ async def run_agent(
         "clarification_question": "",
         "verification_issues": [],
         "corrections_applied": [],
+        "openai_api_key": openai_api_key,
     }
 
     # Run the graph
     config = RunnableConfig(
     recursion_limit=max(80, get_settings().agent_max_iterations * 4),
-    configurable={"session_id": session_id},
+    configurable={"session_id": session_id, "openai_api_key": openai_api_key},
   )
     final_state = await graph.ainvoke(initial_state, config=config)
 
@@ -960,7 +969,7 @@ async def run_agent(
                 if not settings.mock_mode:
                     import asyncio
                     from langchain_core.messages import SystemMessage as _SM, HumanMessage as _HM
-                    followup_llm = _build_llm()
+                    followup_llm = _build_llm(openai_api_key=openai_api_key)
 
                     # Build context from retrieved chunks so suggestions are grounded
                     _chunk_snippets = ""

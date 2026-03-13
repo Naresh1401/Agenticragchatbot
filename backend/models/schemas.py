@@ -71,6 +71,10 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Filenames of recently uploaded/ingested files in this session",
     )
+    openai_api_key: Optional[str] = Field(
+        default=None,
+        description="User-provided OpenAI API key (used per-request, never stored)",
+    )
 
     class Config:
         json_schema_extra = {
